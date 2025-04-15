@@ -28,22 +28,22 @@ from interface import (
     build_interface,
     display_output,
     get_user_inputs,
-    load_header
+    load_header,
+    display_onedrive_login
+    # display_onedrive_auth
 )
 from tabs.about import about_tab
 from tabs.faq import faq_tab
-from services.query_gpt import new_openai_session, query_gpt_for_relevance
-from utils.read_pdf import extract_text_chunks_from_pdf
-from utils.read_docx import extract_text_chunks_from_docx
+from services.query_gpt import new_openai_session, query_gpt_for_relevance, query_gpt_for_relevance_iterative, query_gpt_for_project_details
+from site_text.questions import STEEL_NO, IRON_NO, STEEL_IRON_TECH, CEMENT_NO, CEMENT_TECH
 from utils.read_json import parse_json_feed
+from services.inoreader import build_df_for_folder, fetch_full_article_text
 from utils.relevant_excerpts import (
-    generate_all_embeddings,
-    embed_variable_specifications,
-    find_top_relevant_texts,
+    find_top_relevant_texts
 )
-from utils.results import format_output_doc, get_output_fname, output_results, output_metrics
-
-from docx import Document
+from services.onedrive import upload_file_to_onedrive
+from utils.results import get_output_fname, output_results_excel  
+from services.inoreader import resolve_with_playwright
 from tempfile import TemporaryDirectory
 import json
 import os
@@ -51,33 +51,16 @@ import requests
 import streamlit as st
 import time
 import traceback
-import numpy as np
-
-
+import secrets
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 def get_resource_path(relative_path):
     """
     Returns the resource path for a given relative path.
     """
     return relative_path
 
-def extract_text_chunks(file_path, max_chunk_size):
-    """
-    Extracts text chunks from a file (PDF or DOCX).
-
-    Args:
-        file_path (str): The path to the file.
-        max_chunk_size (int): The maximum size of each text chunk.
-
-    Returns:
-        list: A list of dictionaries containing text chunks, number of pages, character count, and section number.
-    """
-    if file_path.lower().endswith(".pdf"):
-        return extract_text_chunks_from_pdf(file_path, max_chunk_size)
-    elif file_path.lower().endswith(".docx"):
-        return extract_text_chunks_from_docx(file_path, max_chunk_size)
-    else:
-        return [{"error": f"Unsupported file format: {file_path}"}]
-# USE THIS LATER FOR NEWS ARTICLE INFO?
 def extract_news_doc_info(
     gpt_analyzer,
     text_embeddings,
@@ -177,29 +160,6 @@ def fetch_gist_content(gist_url, headers, log_fname):
         print("Failed to fetch gist content.")
         return None
 
-
-def log(new_content):
-    """
-    Logs new activity to a GitHub gist.
-
-    Args:
-        new_content: The new content to log.
-    """
-    github_token = st.secrets["github_token"]
-    log_fname = "log"
-    gist_base_url = "https://api.github.com/gists"
-    gist_url = f"{gist_base_url}/47029f286297a129a654110ebe420f5f"
-    headers = {
-        "Authorization": f"token {github_token}",
-        "Accept": "application/vnd.github.v3+json",
-    }
-    current_content = fetch_gist_content(gist_url, headers, log_fname)
-    if current_content is not None:
-        updated_content = f"{current_content} \n {new_content}"
-        data = {"files": {log_fname: {"content": updated_content}}}
-        requests.patch(gist_url, headers=headers, data=json.dumps(data))
-
-
 def main(gpt_analyzer, openai_apikey):
     """
     Main function to process headlines and generate an output document.
@@ -211,59 +171,123 @@ def main(gpt_analyzer, openai_apikey):
     Returns:
         The total number of articles processed.
     """
-    output_doc = Document()
-    format_output_doc(output_doc, gpt_analyzer)
-    total_start_time = time.time()
-    
-    json_path = get_resource_path(gpt_analyzer.json[0])
-    
-    try:
-        headlines = parse_json_feed(json_path)
-        print(f"Parsed {len(headlines)} headlines from JSON.")
-    except Exception as e:
-        print(f"Failed to parse JSON: {e}")
-        return 0
 
+    total_start_time = time.time()
+    if st.session_state["active_tab"] == "JSON File":
+        json_path = get_resource_path(gpt_analyzer.json[0])
+        try:
+            headlines = parse_json_feed(json_path)
+            print(f"Parsed {len(headlines)} headlines from JSON.")
+        except Exception as e:
+            print(f"Failed to parse JSON: {e}")
+            return 0
+    else:
+        try:
+            headlines = build_df_for_folder(st.session_state["target_folder"])
+            json_path = "Inoreader"
+            print(headlines)
+            print(f"Parsed {len(headlines)} headlines from JSON.")
+        except Exception as e:
+            print(f"Failed to parse JSON: {e}")
+            return 0
     openai_client, gpt_model, _ = new_openai_session(openai_apikey)
     
     # Convert headlines into a DataFrame with necessary text column
     headlines["text_column"] = headlines["title"] + " " + headlines.get("summary", "")
-    
-    # Query GPT for relevance
-    relevance_df = query_gpt_for_relevance(
+    folder = st.session_state["target_folder"]
+    print("Folder", folder)
+    if folder == "LeadIT-Steel":
+        target_questions = STEEL_NO
+    elif folder == "LeadIT-Iron":
+        target_questions = IRON_NO
+    elif folder == "LeadIT-Cement":
+        target_questions = CEMENT_NO
+    else:
+        target_questions = []  # or some default
+    # Assuming your DataFrame of articles is in `headlines` and you have run_on_full_text defined
+    relevance_df = query_gpt_for_relevance_iterative(
         gpt_analyzer,
         headlines,
-        gpt_analyzer.variable_specs,
-        run_on_full_text=True,  # Assuming full text processing
+        target_questions,
+        run_on_full_text=True,  # or False, as applicable
         gpt_client=openai_client,
-        gpt_model=gpt_model,
+        gpt_model=gpt_model
     )
     # Process relevant results for output
+    # After obtaining relevance_df from query_gpt_for_relevance_iterative:
     relevant_articles = []
+    irrelevant_articles = []
+
     for _, row in relevance_df.iterrows():
-        relevant_vars = {var: row[var] for var in gpt_analyzer.variable_specs if row[var]}
-        print("REL VARS", relevant_vars)
-        if relevant_vars:
-            relevant_articles.append({
-                "title": headlines.loc[row["index"], "title"],
-                "relevant": list(relevant_vars.values())[0]
+        article_index = row["index"]
+        article_row = headlines.loc[article_index]
+        article_row["title"] = article_row["title"].split(" - ")[0].strip()
+        title = article_row["title"] 
+        article_row["url"] = resolve_with_playwright(article_row["url"])
+        url = article_row["url"]
+        if row["relevant"] != "no":
+            # Fetch full article text (or use text from the article if already available)
+            full_text = fetch_full_article_text(article_row)
+            if st.session_state["target_folder"] == "LeadIT-Cement":
+            # Extract project details from the article text using the new GPT function.
+                details = query_gpt_for_project_details(openai_client, gpt_model, full_text, CEMENT_TECH)
+            else:
+                details = query_gpt_for_project_details(openai_client, gpt_model, full_text, STEEL_IRON_TECH)  
+            print("done w/ details")
+            if details:
+                # Merge the details into the article dictionary.
+                article_info = {
+                    "title": title,
+                    "url": url,
+                    "full_text": full_text,
+                    **details
+                }
+                relevant_articles.append(article_info)
+            else:
+                article_info = {
+                    "title": title,
+                    "url": url
+                }
+                relevant_articles.append(article_info)
+        else:
+            irrelevant_articles.append({
+                "title": title,
+                "url": url
             })
-    
-    print(f"Relevant Articles: {relevant_articles}")
-    
-    # Output results
-    output_results(gpt_analyzer, output_doc, json_path, relevant_articles)
-    print_milestone("Done processing headlines", total_start_time, {"Number of articles": len(relevant_articles)})
-    
-    output_fname = get_output_fname(get_resource_path)
-    output_doc.save(output_fname)
+
+    logger.info("Total relevant articles: %s", len(relevant_articles))
+    logger.info("Total irrelevant articles: %s", len(irrelevant_articles))
+
+    # Define output file name and path
+    output_fname = get_output_fname(get_resource_path, filetype="xlsx")
+    logger.info("Saving Excel file to %s", output_fname)
+
+    # Use the new Excel output function
+    output_results_excel(relevant_articles, irrelevant_articles, output_fname)
+
+    # Optionally, display or notify the user that the file has been created
     display_output(output_fname)
+
     
+    # Create a container for output messages.
+
+    
+
+    
+
+    print_milestone("Done processing headlines", total_start_time, {"Number of articles": len(relevant_articles)})
     return len(relevant_articles)
 
 
 
 if __name__ == "__main__":
+    query_params = st.query_params
+
+    if "state" in query_params and "code" in query_params:
+        st.session_state["oauth_state"] = query_params["state"]
+    elif "oauth_state" not in st.session_state:
+        st.session_state["oauth_state"] = secrets.token_urlsafe(16)
+    
     try:
         with TemporaryDirectory() as temp_dir:
             logo_path = os.path.join(os.path.dirname(__file__), "public", "logo2.jpg")
@@ -271,6 +295,7 @@ if __name__ == "__main__":
                 layout="wide", page_title="AI Headline Processor", page_icon=logo_path
             )
             load_header()
+            
             _, centered_div, _ = st.columns([1, 3, 1])
             with centered_div:
                 tab1, tab2, tab3 = st.tabs(["Tool", "About", "FAQ"])
@@ -284,9 +309,6 @@ if __name__ == "__main__":
                                 apikey_id = st.session_state["apikey_id"]
                             openai_apikey = st.secrets[apikey_id]
                             num_pages = main(gpt_analyzer, openai_apikey)
-                            log(
-                                f"{time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} GMT --> apikey_id; {num_pages} pages; {gpt_analyzer}"
-                            )
                         st.success("Document generated!")
                         os.unlink(st.session_state["temp_zip_path"])
                 with tab2:
@@ -294,7 +316,4 @@ if __name__ == "__main__":
                 with tab3:
                     faq_tab()
     except Exception as e:
-        log(
-            f"{time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} GMT --> apikey_id:{e}"
-        )
-        log(traceback.format_exc())
+        st.error("Something unexpected occurred")

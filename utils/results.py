@@ -21,7 +21,7 @@ import streamlit as st
 from services.onedrive import get_graph_api_token, upload_file_to_onedrive
 import datetime
 # Function to generate the output file name based on the provided path function and file type
-def get_output_fname(path_fxn, folder, filetype="xlsx"):
+def get_output_fname(folder, filetype="xlsx"):
     """
     Builds a filename of the form:
         results_{folder}_{YYYYMMDD_HHMMSS}.xlsx
@@ -29,7 +29,7 @@ def get_output_fname(path_fxn, folder, filetype="xlsx"):
     """
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"results_{folder}_{ts}.{filetype}"
-    return path_fxn(filename)
+    return filename
 
 def create_word_doc(doc, output_pdf_path, rows_dict):
     fname = os.path.basename(output_pdf_path)

@@ -261,7 +261,6 @@ def main(gpt_analyzer, openai_apikey):
     # Define output file name and path
     folder = st.session_state["target_folder"]
     output_fname = get_output_fname(
-        get_resource_path,
         folder,
         filetype="xlsx"
     )
@@ -275,11 +274,6 @@ def main(gpt_analyzer, openai_apikey):
 
     
     # Create a container for output messages.
-
-    
-
-    
-
     print_milestone("Done processing headlines", total_start_time, {"Number of articles": len(relevant_articles)})
     return len(relevant_articles)
 

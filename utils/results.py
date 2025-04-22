@@ -28,7 +28,7 @@ def get_output_fname(folder, filetype="xlsx"):
     and then passes it through `path_fxn` (e.g. to prepend a directory).
     """
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"results_{folder}_{ts}.{filetype}"
+    filename = f"{folder}/results_{ts}.{filetype}"
     return filename
 
 def create_word_doc(doc, output_pdf_path, rows_dict):

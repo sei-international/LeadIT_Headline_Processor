@@ -268,10 +268,6 @@ def main(gpt_analyzer, openai_apikey):
 
     # Use the new Excel output function
     output_results_excel(relevant_articles, irrelevant_articles, output_fname)
-
-    # Optionally, display or notify the user that the file has been created
-    display_output(output_fname)
-
     
     # Create a container for output messages.
     print_milestone("Done processing headlines", total_start_time, {"Number of articles": len(relevant_articles)})

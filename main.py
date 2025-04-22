@@ -282,38 +282,49 @@ def main(gpt_analyzer, openai_apikey):
 
 if __name__ == "__main__":
     query_params = st.query_params
-
     if "state" in query_params and "code" in query_params:
         st.session_state["oauth_state"] = query_params["state"]
     elif "oauth_state" not in st.session_state:
         st.session_state["oauth_state"] = secrets.token_urlsafe(16)
-    
-    try:
-        with TemporaryDirectory() as temp_dir:
-            logo_path = os.path.join(os.path.dirname(__file__), "public", "logo2.jpg")
-            st.set_page_config(
-                layout="wide", page_title="AI Headline Processor", page_icon=logo_path
-            )
-            load_header()
-            
-            _, centered_div, _ = st.columns([1, 3, 1])
-            with centered_div:
-                tab1, tab2, tab3 = st.tabs(["Tool", "About", "FAQ"])
-                with tab1:
-                    build_interface(temp_dir)
-                    if st.button("Run", disabled=st.session_state.get("run_disabled", False)):
-                        gpt_analyzer = get_user_inputs()
-                        with st.spinner("Generating output document..."):
-                            apikey_id = "openai_apikey"
-                            if "apikey_id" in st.session_state:
-                                apikey_id = st.session_state["apikey_id"]
+
+    with TemporaryDirectory() as temp_dir:
+        logo_path = os.path.join(os.path.dirname(__file__), "public", "logo2.jpg")
+        st.set_page_config(
+            layout="wide", page_title="AI Headline Processor", page_icon=logo_path
+        )
+        load_header()
+
+        _, centered_div, _ = st.columns([1, 3, 1])
+        with centered_div:
+            tab1, tab2, tab3 = st.tabs(["Tool", "About", "FAQ"])
+
+            with tab1:
+                build_interface(temp_dir)
+
+                if st.button("Run", disabled=st.session_state.get("run_disabled", False)):
+                    gpt_analyzer = get_user_inputs()
+                    with st.spinner("Generating output document..."):
+                        try:
+                            apikey_id = st.session_state.get("apikey_id", "openai_apikey")
                             openai_apikey = st.secrets[apikey_id]
                             num_pages = main(gpt_analyzer, openai_apikey)
-                        st.success("Document generated!")
-                        os.unlink(st.session_state["temp_zip_path"])
-                with tab2:
-                    about_tab()
-                with tab3:
-                    faq_tab()
-    except Exception as e:
-        st.error("Something unexpected occurred")
+                        except Exception as e:
+                            logger.exception("Error generating document")
+                            st.error(f"Could not generate document: {e}")
+                        else:
+                            st.success("Document generated!")
+
+                            zip_path = st.session_state.get("temp_zip_path")
+                            if zip_path and os.path.isfile(zip_path):
+                                try:
+                                    os.unlink(zip_path)
+                                except OSError:
+                                    logger.warning(
+                                        "Failed to delete temp zip: %s", zip_path, exc_info=True
+                                    )
+
+            with tab2:
+                about_tab()
+
+            with tab3:
+                faq_tab()

@@ -259,7 +259,12 @@ def main(gpt_analyzer, openai_apikey):
     logger.info("Total irrelevant articles: %s", len(irrelevant_articles))
 
     # Define output file name and path
-    output_fname = get_output_fname(get_resource_path, filetype="xlsx")
+    folder = st.session_state["target_folder"]
+    output_fname = get_output_fname(
+        get_resource_path,
+        folder,
+        filetype="xlsx"
+    )
     logger.info("Saving Excel file to %s", output_fname)
 
     # Use the new Excel output function
